@@ -92,8 +92,10 @@ OSQPInt init_linsys_mklcg(mklcg_solver**     sp,
   OSQPInt m = A->csc->m;
   OSQPInt n = P->csc->n;
   MKL_INT status;
-  mklcg_solver* s = (mklcg_solver *)c_malloc(sizeof(mklcg_solver));
-  *sp = s;
+  mklcg_solver* s = (mklcg_solver *)c_calloc(1, sizeof(mklcg_solver));
+  *sp = OSQP_NULL;
+
+  if (!s) return OSQP_LINSYS_SOLVER_INIT_ERROR;
 
   //Just hold on to pointers to the problem
   //data, no copies or processing required
@@ -110,6 +112,10 @@ OSQPInt init_linsys_mklcg(mklcg_solver**     sp,
   //if polish is false, use the rho_vec we get.
   //Otherwise, use rho_vec = ones.*(1/sigma)
   s->rho_vec = OSQPVectorf_malloc(m);
+  if (!s->rho_vec) {
+    free_linsys_mklcg(s);
+    return OSQP_LINSYS_SOLVER_INIT_ERROR;
+  }
   if (!polish) {
       OSQPVectorf_copy(s->rho_vec, rho_vec);
   } else {
@@ -147,9 +153,15 @@ OSQPInt init_linsys_mklcg(mklcg_solver**     sp,
   //Initialise solver state to zero since it provides
   //cold start condition for the CG inner solver
   s->x = OSQPVectorf_calloc(n);
-
-  //Workspace for CG products and polishing
   s->ywork = OSQPVectorf_malloc(m);
+  s->tmp = OSQPVectorf_malloc(4*n);
+  s->precond     = OSQPVectorf_malloc(n);
+  s->precond_inv = OSQPVectorf_malloc(n);
+
+  if (!s->x || !s->ywork || !s->tmp || !s->precond || !s->precond_inv) {
+    free_linsys_mklcg(s);
+    return OSQP_LINSYS_SOLVER_INIT_ERROR;
+  }
 
   //make subviews for the rhs.   OSQP passes
   //a different RHS pointer at every iteration,
@@ -157,13 +169,6 @@ OSQPInt init_linsys_mklcg(mklcg_solver**     sp,
   //time we solve. Just point them at x for now.
   s->r1 = OSQPVectorf_view(s->x, 0, 0);
   s->r2 = OSQPVectorf_view(s->x, 0, 0);
-
-  //Allocate a 4*n vector for the MKL workspace
-  // 1:n     = Vector to multiply by the matrix
-  // n+1:2n  = Vector after multiplying by the matrix
-  // 2n+1:3n = Vector to apply the preconditioner to
-  // 3n+1:4n = Vector after application of the preconditioner
-  s->tmp = OSQPVectorf_malloc(4*n);
 
   // Create subviews to tmp to aid the matrix-vector multiplication
   s->mvm_pre  = OSQPVectorf_view(s->tmp, 0, n);
@@ -173,14 +178,21 @@ OSQPInt init_linsys_mklcg(mklcg_solver**     sp,
   s->precond_pre  = OSQPVectorf_view(s->tmp, 2*n, n);
   s->precond_post = OSQPVectorf_view(s->tmp, 3*n, n);
 
-  status = cg_solver_init(s);
+  if (!s->r1 || !s->r2 || !s->mvm_pre || !s->mvm_post ||
+      !s->precond_pre  || !s->precond_post) {
+    free_linsys_mklcg(s);
+    return OSQP_LINSYS_SOLVER_INIT_ERROR;
+  }
 
-  // Compute the preconditioner
-  s->precond     = OSQPVectorf_malloc(n);
-  s->precond_inv = OSQPVectorf_malloc(n);
+  status = cg_solver_init(s);
+  if (status != 0) {
+    free_linsys_mklcg(s);
+    return OSQP_LINSYS_SOLVER_INIT_ERROR;
+  }
   cg_update_precond(s);
 
-  return status;
+  *sp = s;
+  return 0;
 }
 
 
@@ -375,7 +387,7 @@ OSQPInt update_rho_linsys_mklcg(mklcg_solver*    s,
 
 void free_linsys_mklcg(mklcg_solver* s) {
 
-  if (s->tmp) {
+  if (s) {
     OSQPVectorf_free(s->tmp);
     OSQPVectorf_free(s->rho_vec);
     OSQPVectorf_free(s->x);
@@ -388,6 +400,6 @@ void free_linsys_mklcg(mklcg_solver* s) {
     OSQPVectorf_view_free(s->mvm_post);
     OSQPVectorf_view_free(s->precond_pre);
     OSQPVectorf_view_free(s->precond_post);
+    c_free(s);
   }
-  c_free(s);
 }
