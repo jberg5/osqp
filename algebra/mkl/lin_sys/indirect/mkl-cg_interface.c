@@ -154,6 +154,12 @@ OSQPInt init_linsys_mklcg(mklcg_solver**     sp,
   //cold start condition for the CG inner solver
   s->x = OSQPVectorf_calloc(n);
   s->ywork = OSQPVectorf_malloc(m);
+
+  //Allocate a 4*n vector for the MKL workspace
+  // 1:n     = Vector to multiply by the matrix
+  // n+1:2n  = Vector after multiplying by the matrix
+  // 2n+1:3n = Vector to apply the preconditioner to
+  // 3n+1:4n = Vector after application of the preconditioner
   s->tmp = OSQPVectorf_malloc(4*n);
   s->precond     = OSQPVectorf_malloc(n);
   s->precond_inv = OSQPVectorf_malloc(n);
